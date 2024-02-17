@@ -1,0 +1,135 @@
+import google.generativeai as genai
+import json
+import sqlite3
+import speech_recognition as sr
+import pyttsx3
+import time
+
+# engine = pyttsx3.init()
+# time.sleep(1)
+
+# rate = engine.getProperty("rate")
+# engine.setProperty("rate", 100)
+# volume = engine.getProperty("volume")
+# engine.setProperty("volume", 1.0)
+# voices = engine.getProperty("voices")
+# for voice in voices:
+#     print(voice.id)
+# engine.setProperty("voice", voices[1].id)
+
+# r = sr.Recognizer()
+# speech = "Hello"
+
+genai.configure(api_key=" ")
+model = genai.GenerativeModel('gemini-pro')
+chat = model.start_chat()
+
+# Prompt
+prompt1 = '''你是餐厅中的一名员工，我是客人，会预约餐厅中的桌子，餐厅中有'''
+table_num = 4
+prompt2 = '''张桌子，把我说的话转换成json格式，不用回答其它，格式如下:
+```json
+{
+    booking: [
+	{"name":"desk1","start_time":"18:00","end_time":"20:00"},
+	{"name":"desk2","start_time":"20:00","end_time":"21:00"}
+	]
+}
+```
+如果我输入"帮我预约 8 点到 10 点的桌子 3，9 点到10点的桌子 4"，你的输出应如下：
+```json
+{
+    "booking": [
+        {"name":"desk3","start_time":"*20:00*","end_time":"*22:00*"},
+        {"name":"desk4","start_time":"*21:00*","end_time":"*22:00*"}
+    ]
+}
+```'''
+prompt = prompt1 + str(table_num) + prompt2
+
+# Send Message to gpt
+chat.send_message(prompt)
+
+#dbfile
+dbfile = sqlite3.connect('216MainDB.db')
+cursor = dbfile.cursor()
+cursor.execute('''
+    CREATE TABLE IF NOT EXISTS desk_bookings (
+        id INTEGER PRIMARY KEY,
+        desk_name TEXT NOT NULL,
+        start_time TEXT NOT NULL,
+        end_time TEXT NOT NULL
+    )
+''')
+
+def check_time_collision(new_booking):
+
+    cursor.execute('SELECT start_time, end_time FROM desk_bookings WHERE desk_name = ?', (new_booking['name'],))
+    existing_bookings = cursor.fetchall()
+    print("##Exiting List: ", existing_bookings)
+
+    # all_bookings = existing_bookings + [(b['start_time'], b['end_time']) for b in table_bookings.get(new_booking['name'], [])]
+    # print("##Check List:, ", sorted_bookings)
+
+    sorted_bookings = sorted(existing_bookings, key=lambda x: x[0])
+
+    for start_time, end_time in sorted_bookings:
+        if new_booking['start_time'] < end_time and new_booking['end_time'] > start_time:
+            return True
+    return False
+
+while True:
+
+    inp = input(">>>>>>> ")
+    if inp == "quit":
+        break
+
+    # r = sr.Recognizer()
+    # with sr.Microphone() as source:
+    #     audio = r.listen(source)
+    # try:
+    #     print(r.recognize_google(audio, language="en-US"))
+    # except Exception as e:
+    #     print("something wrong {0}".format(e))
+    #
+    # inp = audio
+
+    response = chat.send_message(inp)
+    text = response.text
+    print(text)
+    try:
+        text = text.split("```")[1].replace('json', '').strip()
+    except:
+        print("can't find json")
+    try:
+        code = json.loads(text)
+    except json.JSONDecodeError as e:
+        print(f"Error decoding JSON: {e}")
+        continue
+
+    for i in code["booking"]:
+        print("------------------------------------------")
+        print("@i: ", i)
+
+        desk_name = i['name']
+        start_time = i['start_time']
+        end_time = i['end_time']
+
+        dbfile.commit()
+        print("!Customer: ", f"{desk_name} from {start_time} to {end_time}")  # customer command
+
+        collision_detected = False
+        collision_detected = check_time_collision(i)
+
+        if collision_detected:
+            print(f"桌子 {desk_name} 的预约时间发生相撞，请重新安排时间。")
+        else:
+            cursor.execute('''
+                                    INSERT INTO desk_bookings (desk_name, start_time, end_time)
+                                    VALUES (?, ?, ?)
+                                ''', (desk_name, start_time, end_time))
+            print(f"桌子 {desk_name} 的预约时间没有相撞，可以继续进行预约。")
+
+
+cursor.close()
+dbfile.close()
